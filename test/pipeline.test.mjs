@@ -1,4 +1,4 @@
-import { test, before } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -38,6 +38,10 @@ before(async () => {
   ]);
   assert.equal(r.code, 0, r.stderr);
   fs.writeFileSync(path.join(dir, 'synthetic.vtt'), 'WEBVTT\n\n00:00:00.200 --> 00:00:01.800\nScene one test pattern\n\n00:00:02.100 --> 00:00:03.000\nWhite card arrives\n\n00:00:03.600 --> 00:00:04.800\nWiped to black\n');
+});
+
+after(() => {
+  if (dir) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('overview produces all artifacts for a local file', { skip }, async () => {
