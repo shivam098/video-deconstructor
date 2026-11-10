@@ -1,0 +1,10 @@
+node_modules/
+output/
+.cache/
+*.mp4
+*.mkv
+*.webm
+*.vtt
+*.srt
+.DS_Store
+Thumbs.db

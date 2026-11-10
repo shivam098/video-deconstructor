@@ -1,0 +1,22 @@
+{
+  "name": "video-deconstructor",
+  "version": "0.1.0",
+  "description": "Reverse-engineer how any video is made (Vox, Bloomberg, 3D animations, motion graphics) via yt-dlp + ffmpeg + multimodal LLMs.",
+  "license": "MIT",
+  "skills": [
+    "skills/video-production-deconstructor"
+  ],
+  "mcpServers": {
+    "video-deconstructor": {
+      "type": "local",
+      "command": "node",
+      "args": [
+        "bin/cli.mjs",
+        "mcp"
+      ],
+      "tools": [
+        "*"
+      ]
+    }
+  }
+}
