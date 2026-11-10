@@ -7,6 +7,7 @@ import {
 import { requireTool, ytDlpEnv, jsRuntimeArgs, findFont, defaultCacheRoot } from './binaries.mjs';
 import { detectCuts, detectSoftTransitions, mergeCuts, computePacing, computeActivity, pickStyleFrameTimes } from './metrics.mjs';
 import { parseCaptions, buildAvTimeline, cutsNearNarration } from './timeline.mjs';
+import { transcribe, findWhisperModel, whisperBackend, whisperInstallHint } from './transcribe.mjs';
 
 const require = createRequire(import.meta.url);
 export const VERSION = require('../package.json').version;
@@ -423,6 +424,99 @@ function loadCaptions(media, A, B) {
   }
 }
 
+const transcriptsDir = () => path.join(defaultCacheRoot(), 'transcripts');
+
+/** Whisper transcripts cached for this media (absolute times), newest first. */
+function cachedTranscripts(media) {
+  let files = [];
+  try { files = fs.readdirSync(transcriptsDir()).filter((f) => f.startsWith(`${media.key}__`) && f.endsWith('.json')); } catch { /* none yet */ }
+  return files.map((f) => readJson(path.join(transcriptsDir(), f))).filter(Boolean).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+}
+
+/** Captions first; otherwise the cached Whisper transcript that best covers [A, B]. */
+function loadNarration(media, A, B) {
+  const cues = loadCaptions(media, A, B);
+  if (cues.length) return { cues, kind: media.captionsKind };
+  const overlap = (t) => Math.min(t.end, B) - Math.max(t.start, A);
+  const candidates = cachedTranscripts(media).filter((t) => overlap(t) > 0);
+  const best = candidates.find((t) => t.start <= A + 0.01 && t.end >= B - 0.01)
+    || candidates.sort((x, y) => overlap(y) - overlap(x))[0];
+  if (best) {
+    const inRange = best.cues.filter((c) => c.start >= A - 0.5 && c.start < B);
+    if (inRange.length) return { cues: inRange, kind: `Whisper transcription (${best.model})` };
+  }
+  return { cues: [], kind: null };
+}
+
+/**
+ * Transcribe [A, B] with Whisper, reusing a cached transcript of the same
+ * range and model. mode: 'auto' (only when there are no captions and a model
+ * is installed), 'always', or 'never'.
+ */
+async function narrationFor(media, probe, { A, B, localStart, dur }, { mode = 'auto', model: modelName, language = 'auto', translate = false }) {
+  if (!['auto', 'always', 'never'].includes(mode)) throw new Error(`transcribe must be auto, always or never (got "${mode}")`);
+  const captions = loadCaptions(media, A, B);
+  if (mode === 'never' || !probe.hasAudio) return { cues: captions, kind: captions.length ? media.captionsKind : null, note: null };
+  if (mode === 'auto' && captions.length) return { cues: captions, kind: media.captionsKind, note: null };
+  const model = findWhisperModel(modelName);
+  if (!model) {
+    const hint = `run "video-deconstructor setup-whisper${modelName ? ` --model ${modelName}` : ''}" (or the setup_whisper MCP tool) to enable local transcription`;
+    if (mode === 'always') throw new Error(`No Whisper model installed: ${hint}.`);
+    return { cues: captions, kind: null, note: `No captions found. To transcribe the audio locally, ${hint}.` };
+  }
+  if (mode === 'auto' && !(await whisperBackend())) {
+    return { cues: captions, kind: null, note: `No captions found, and Whisper can't run here: ${whisperInstallHint()}` };
+  }
+  const id = `${media.key}__${model.name}__${language}${translate ? '-en' : ''}__${fileTag(A)}_${fileTag(B)}`;
+  const cacheFile = path.join(ensureDir(transcriptsDir()), `${id}.json`);
+  let t = readJson(cacheFile);
+  if (!t) {
+    log(`transcribing ${fmtTime(A)}-${fmtTime(B)} with Whisper (${model.name})`);
+    let r;
+    try {
+      r = await transcribe({
+        file: media.videoPath, localStart, dur, absStart: A, outSrt: path.join(transcriptsDir(), `${id}.srt`), model, language, translate,
+      });
+    } catch (e) {
+      if (mode === 'always') throw e;
+      log('Whisper transcription skipped:', e.message);
+      return { cues: captions, kind: null, note: `No captions found; Whisper transcription failed: ${e.message}` };
+    }
+    t = { model: r.model, backend: r.backend, language, translate, start: A, end: B, elapsedSec: r.elapsedSec, createdAt: new Date().toISOString(), cues: r.cues };
+    writeJson(cacheFile, t);
+    log(`transcribed ${r.cues.length} segments in ${r.elapsedSec}s`);
+  }
+  return { cues: t.cues, kind: `Whisper transcription (${t.model}${translate ? ', translated to English' : ''})`, note: null, transcriptFile: cacheFile };
+}
+
+/** Download/cache a URL (or resolve a local path) and return the media file; used by the Gemini path. */
+export async function acquireMedia(source, opts = {}) {
+  const media = await acquire(source, { maxHeight: opts.maxHeight ?? 1080, cacheRoot: defaultCacheRoot(), captions: opts.captions });
+  return { file: media.videoPath, key: media.key, media };
+}
+
+/** Standalone transcription of a URL or file (optionally a section). */
+export async function transcribeSource(source, opts = {}) {
+  const start = parseTime(opts.start);
+  const end = parseTime(opts.end);
+  await requireTool('ffmpeg');
+  await requireTool('ffprobe');
+  const media = await acquire(source, { start, end, maxHeight: opts.maxHeight ?? 1080, cacheRoot: defaultCacheRoot(), captions: opts.captions });
+  const probe = await probeMedia(media.videoPath);
+  if (!probe.hasAudio) throw new Error('This media has no audio stream.');
+  const range = resolveRange(media, probe, start, end);
+  const n = await narrationFor(media, probe, range, { mode: 'always', model: opts.model, language: opts.language, translate: opts.translate });
+  const runDir = runDirFor(media, opts);
+  const out = path.join(runDir, `transcript_${fileTag(range.A)}_${fileTag(range.B)}.md`);
+  fs.writeFileSync(out, [`# Transcript - ${media.meta.title}`, '', `- ${n.kind}`, `- Range ${fmtTime(range.A)}-${fmtTime(range.B)}`, '',
+    ...n.cues.map((c) => `- **${fmtTime(c.start)}** ${c.text}`), ''].join('\n'));
+  return {
+    source: { input: source, key: media.key, title: media.meta.title, url: media.meta.url },
+    range: { start: round(range.A), end: round(range.B), startTime: fmtTime(range.A), endTime: fmtTime(range.B) },
+    narrationSource: n.kind, segments: n.cues.length, transcript: out, cues: n.cues,
+  };
+}
+
 /**
  * Pass 1 + 2 extraction: editorial cuts, pacing, A/V script, storyboard
  * contact sheets, full-resolution style frames and the audio strip.
@@ -452,7 +546,10 @@ export async function overview(source, opts = {}) {
   const { cuts } = findCuts(signal, A, threshold, softThreshold);
   const pacing = computePacing({ cuts, start: A, end: B, chapters: media.chapters });
   const activity = computeActivity(signal.coarse, cuts, { start: A, end: B });
-  const cues = loadCaptions(media, A, B);
+  const narration = await narrationFor(media, probe, { A, B, localStart, dur }, {
+    mode: opts.transcribe || 'auto', model: opts.whisperModel, language: opts.whisperLanguage, translate: opts.whisperTranslate,
+  });
+  const cues = narration.cues;
 
   const styleDir = resetDir(path.join(runDir, 'style-frames'));
   const styleFrames = await extractFrames({
@@ -486,7 +583,7 @@ export async function overview(source, opts = {}) {
   writeJson(path.join(runDir, 'pacing-metrics.json'), metrics);
 
   const timeline = buildAvTimeline({
-    meta: { ...media.meta, captionsKind: media.captionsKind },
+    meta: { ...media.meta, captionsKind: narration.kind },
     pacing, cues, silences: signal.silences, chapters: media.chapters, styleFrames, relDir: 'style-frames',
   });
   fs.writeFileSync(path.join(runDir, 'av-timeline.md'), timeline);
@@ -519,7 +616,8 @@ export async function overview(source, opts = {}) {
       medianShotLength: pacing.medianShotLength,
       cutsPerMinute: pacing.cutsPerMinute,
       captionLines: cues.length,
-      captionsKind: media.captionsKind,
+      captionsKind: narration.kind,
+      narrationNote: narration.note || undefined,
       silences: signal.silences.length,
       lowMotionShare: activity.lowMotionShare,
       motionHotspots: activity.motionHotspots,
@@ -529,6 +627,7 @@ export async function overview(source, opts = {}) {
       avTimeline: path.join(runDir, 'av-timeline.md'),
       pacingMetrics: path.join(runDir, 'pacing-metrics.json'),
       captions: cues.length ? path.join(runDir, 'captions.json') : null,
+      whisperTranscript: narration.transcriptFile || null,
       audioStrip,
       contactSheets: sheets.map((s) => ({ ...s, startTime: fmtTime(s.start), endTime: fmtTime(s.end) })),
       styleFrames: styleFrames.map((f) => ({ path: f.path, t: f.t, time: f.time, shot: f.shot })),
@@ -572,7 +671,7 @@ export async function zoom(source, opts = {}) {
   const audioStrip = probe.hasAudio
     ? await renderAudioStrip({ file: media.videoPath, localStart, dur, absStart: A, cuts, silences: signal.silences, outFile: path.join(outDir, 'audio-strip.png') })
     : null;
-  const cues = loadCaptions(media, A, B);
+  const cues = loadNarration(media, A, B).cues;
   const motion = signal.frames.map((f) => ({ t: round(f.t, 3), mafd: round(f.mafd, 3), score: round(f.score, 4) }));
 
   const result = {

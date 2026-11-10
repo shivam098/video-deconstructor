@@ -4,11 +4,24 @@ All runs were on Windows 11 ARM64 (Snapdragon) with Node 26, ffmpeg 9.0.2 (Gyan,
 
 ## Automated tests
 
-`npm test` runs 18 tests:
+`npm test` runs 29 tests:
 
 - **Unit (13):** time parsing/formatting, filter escaping, YouTube ID parsing, VTT (including YouTube rolling auto-captions) and SRT parsing, hard-cut detection and merging, soft-transition detection, pacing statistics, chapter segmentation, MAFD-based activity and hotspots, style-frame selection (many short shots and one long shot), and A/V timeline rendering.
 - **Pipeline (4):** an ffmpeg-generated 5 s video with a hard cut at 2.0 s, a 0.5 s wipe at 3.0-3.5 s, an audio gap at 3-4 s and sidecar captions. The tests check that the overview finds exactly one hard and one soft cut at the right times, the silence, three style frames, the contact sheets, the audio strip and the narration-per-shot timeline. They also check that the zoom finds the cut in a 1 s window at 10 fps, that frames come out at native resolution, and that an audio strip with 700 cuts and 300 silences renders through a filter script file that is then cleaned up.
-- **MCP (1):** starts the server over stdio and exercises `initialize`, `tools/list`, `tools/call` (`check_environment`, a failing call returned as `isError`, a real frame extraction with an inline image) and an unknown-method error.
+- **MCP (1):** starts the server over stdio and exercises `initialize`, `tools/list` (all seven tools), `tools/call` (`check_environment` including the Whisper/Gemini status, a failing call returned as `isError`, a real frame extraction with an inline image) and an unknown-method error.
+- **Optional add-ons (11):**
+  - **Whisper (5, real transcription):**
+    - A 6 s clip with speech synthesized by ffmpeg's `flite` (starting at 1.5 s) and no captions. The overview transcribes it automatically and the timeline is labelled as a Whisper transcription.
+    - A section transcription starting at 1 s returns absolute timestamps.
+    - Model and output paths containing an apostrophe, a comma, spaces and brackets work.
+    - A broken model doesn't abort an `auto` overview (it adds a note) but fails `always`.
+    - `transcribe=never` disables transcription, a missing model produces the `setup-whisper` note, and `always` without a model fails clearly.
+  - **Parsing (2):** repeated lines are kept with rolling de-duplication off, and four Gemini response shapes are read correctly.
+  - **Gemini (4, against a local mock API):**
+    - A YouTube link is sent directly with clipping and fps.
+    - A local file is streamed through the resumable upload (headers, byte count) and polled until `ACTIVE`.
+    - Agentic mode runs in the background and is polled; options that don't apply to it are rejected.
+    - Error messages are clear for a 429 quota error, an invalid key and a missing key.
 
 ## Genre validation
 
@@ -54,6 +67,9 @@ Run through the MCP server with real URLs, reusing the cache:
 - `extract_highres_style_frames` on `https://youtu.be/-DDbYSg0Alw` (short-URL form) at `1:17` and `01:24.5`: 4 s, two 1920x1080 frames taken from the cached 0:59-3:01 section.
 
 ### Other paths
+
+- **Whisper on a real video:** `setup-whisper` downloaded `base.en` (141 MB) in 92 s. `transcribe` on the first 60 s of the Vox video took 5.4 s and produced 14 segments. Compared with Vox's own subtitles, the wording is close to verbatim and timestamps are within about 0.3 s. There was one error ("certain biases" where the subtitles say "certain violations"), and Whisper kept a sentence the subtitles condense.
+- **Gemini:** only verified against the mock server, because no API key was available on the build machine. The live endpoint was reachable (it returned HTTP 403 without a key).
 
 - **Non-YouTube URL:** `https://download.blender.org/peach/trailer/trailer_400p.ogg` (generic extractor, `.ogg` container). The overview found 18 shots, 30.9 cuts/min and a 1.1 s median shot (fast trailer cutting) in 6 s. A following `frames` call reused the cached download.
 - **No Deno on PATH:** with `PATH` reduced to `C:\Windows`, the MCP server still found every binary in known install locations and fell back to `--js-runtimes node:<node>`. A fresh YouTube video (Vox, *Memory, Explained*) then downloaded and produced 1080p frames.

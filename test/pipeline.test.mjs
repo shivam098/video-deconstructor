@@ -123,9 +123,12 @@ test('MCP server speaks JSON-RPC over stdio', async () => {
     const list = await s.call('tools/list', {});
     assert.deepEqual(list.result.tools.map((t) => t.name), [
       'check_environment', 'deconstruct_video_overview', 'inspect_motion_or_transition', 'extract_highres_style_frames',
+      'setup_whisper', 'transcribe_audio', 'gemini_analyze_video',
     ]);
     const env = await s.call('tools/call', { name: 'check_environment', arguments: {} });
-    assert.ok(JSON.parse(env.result.content[0].text).tools.ffmpeg);
+    const envJson = JSON.parse(env.result.content[0].text);
+    assert.ok(envJson.tools.ffmpeg);
+    assert.ok('whisper' in envJson && 'gemini' in envJson);
     const bad = await s.call('tools/call', { name: 'extract_highres_style_frames', arguments: { source: path.join(os.tmpdir(), 'nope.mp4'), timestamps: [1] } });
     assert.equal(bad.result.isError, true);
     if (!skip) {

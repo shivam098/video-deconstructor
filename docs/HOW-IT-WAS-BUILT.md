@@ -104,14 +104,28 @@ The same live test also showed that single-file sources keep their own container
 
 - **Section downloads re-encode.** Accurate section boundaries need `--force-keyframes-at-cuts`, which re-encodes the clip. A 2-minute 1080p section took about 3-4 minutes on the test machine (Windows on ARM running x64 ffmpeg under emulation). For short videos, a full download (no `--start`/`--end`) is faster.
 - **Cut detection is heuristic.** Very fast motion can register as a soft transition, and long dissolves can be missed. Thresholds are adjustable (`scene_threshold`, `soft_threshold`).
-- **Captions:** English uploader subtitles are preferred, then YouTube auto-captions. Without captions, the narration column is empty.
-- **No speech-to-text.** Videos without captions are not transcribed. Adding local Whisper is a possible extension.
+- **Captions:** English uploader subtitles are preferred, then YouTube auto-captions, then a local Whisper transcript (if a model is installed).
+- **Gemini** is only as good as Google's sampling (1 fps by default) and is not a measurement; the local cut and pacing data stays the reference. It sends media to Google.
 - **Tool attribution is inference.** The skill tells the model to label software and technique guesses as inferences.
 
-## 6. Possible extensions
+## 6. Optional add-ons (added after the first release)
 
-- Optional local Whisper transcription for uncaptioned videos.
+**Whisper.** While checking options, `ffmpeg -filters` showed that this machine's ffmpeg 9 already includes the `whisper` filter (whisper.cpp), so local transcription needed no new binary, only a model file. A first run with `tiny.en` transcribed 30 s in 3.3 s but misheard "school-to-prison pipeline" as "school-depressant pipelines". The default became `base.en`, which transcribed 60 s in 5.4 s and closely matched the uploader's subtitles. Caption parsing gained a `rolling: false` mode so Whisper's legitimately repeated lines aren't dropped by the YouTube rolling-caption de-duplication. The Whisper `language` value is validated because it is interpolated into the filter string.
+
+**Gemini.** Google's current API is the Interactions API (`/v1beta/interactions`) with typed inputs. YouTube URLs are in preview at no charge, with a free-tier cap of 8 hours of YouTube video per day. The client is dependency-free, using `fetch` and streaming uploads. It was tested against a mock server that checks headers, upload size, polling and request bodies, because no key was available during development. On the free tier, Google may use submitted content, so the tool is opt-in, the MCP tool description says so, and the skill tells agents to ask first.
+
+**npx from GitHub.** Publishing to the public npm registry was not possible from the build machine (the corporate network routes npm to an internal feed and blocks `registry.npmjs.org`). `npx github:shivam098/video-deconstructor` was verified instead and documented.
+
+**Second code review.** A review of the add-ons found five issues, all fixed and covered by tests:
+1. A Whisper failure in `auto` mode aborted the whole overview. It now adds a note instead, and only `always` fails.
+2. ffmpeg filter values dropped apostrophes, which broke paths such as `/Users/o'neil`. Values now use ffmpeg's two-level escaping instead of quoting; labels on sheets and strips were re-checked by eye.
+3. The Gemini MP4-conversion cache was keyed only by file name, and partial files could be reused. It is now keyed by path, size and mtime, and written atomically.
+4. `zoom` could pick a newer transcript that only partly covered the window. It now prefers full coverage, then the largest overlap.
+5. Gemini results for YouTube links were saved to a shared folder instead of the video's run folder.
+
+## 7. Possible extensions
+
 - Colour palette extraction (k-means on style frames) into `pacing-metrics.json`.
 - OCR of on-screen text to recover titles, labels and chart annotations.
 - Faster section downloads (stream copy, then trim by measured offset).
-- Optional Gemini API pass-through for native video understanding when a key is available.
+- Publishing to the npm registry.

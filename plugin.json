@@ -1,6 +1,6 @@
 {
   "name": "video-deconstructor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reverse-engineer how any video is made (Vox, Bloomberg, 3D animations, motion graphics) via yt-dlp + ffmpeg + multimodal LLMs.",
   "license": "MIT",
   "skills": [

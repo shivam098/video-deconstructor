@@ -112,7 +112,13 @@ export function isUrl(s) {
   return /^https?:\/\//i.test(String(s).trim());
 }
 
-/** Escape a value for use inside a single-quoted ffmpeg filter option. */
+/**
+ * Escape a value for an ffmpeg filter option without quoting: first for the
+ * option parser (\ ' :), then for the filtergraph parser (\ ' [ ] , ;).
+ * Backslashes are normalised to forward slashes, which ffmpeg accepts on all
+ * platforms, so Windows paths stay simple.
+ */
 export function filterValue(v) {
-  return `'${String(v).replace(/\\/g, '/').replace(/'/g, '').replace(/:/g, '\\:')}'`;
+  const level1 = String(v).replace(/\\/g, '/').replace(/[\\':]/g, (c) => `\\${c}`);
+  return level1.replace(/[\\'[\],;]/g, (c) => `\\${c}`);
 }

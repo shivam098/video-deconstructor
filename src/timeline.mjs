@@ -21,7 +21,7 @@ function parseTimestamp(s) {
  * YouTube auto-captions repeat the previous line in every "rolling" cue and
  * insert 10 ms transition cues; both are collapsed so each line appears once.
  */
-export function parseCaptions(text) {
+export function parseCaptions(text, { rolling = true } = {}) {
   const blocks = String(text).replace(/^\uFEFF/, '').replace(/\r/g, '').split(/\n{2,}/);
   const raw = [];
   for (const block of blocks) {
@@ -39,7 +39,7 @@ export function parseCaptions(text) {
   for (const c of raw) {
     if (c.end - c.start < 0.05) continue;
     for (const line of c.lines) {
-      if (recent.includes(line)) continue;
+      if (rolling && recent.includes(line)) continue;
       cues.push({ start: round(c.start), end: round(c.end), text: line });
       recent.push(line);
       if (recent.length > 4) recent.shift();

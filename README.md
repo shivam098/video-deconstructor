@@ -4,7 +4,7 @@
 
 Language models can't watch videos inside coding agents. `video-deconstructor` turns a YouTube URL or a local video into files a multimodal model *can* read: timestamped storyboard sheets, full-resolution style frames, an audio strip with cut markers, measured pacing statistics and a shot-by-shot A/V script. A bundled skill then guides the model through a three-pass breakdown of structure, visual design, and motion and transitions, ending in a recreation recipe.
 
-It works as an **MCP server** (GitHub Copilot, Claude Desktop / Claude Code, Cursor, VS Code), a **CLI**, and an **agent skill**. It needs no API keys and has no npm dependencies, and it runs on Windows, macOS and Linux.
+It works as an **MCP server** (GitHub Copilot, Claude Desktop / Claude Code, Cursor, VS Code), a **CLI**, and an **agent skill**. It needs no API keys and has no npm dependencies, and it runs on Windows, macOS and Linux. Two optional add-ons are included: local Whisper transcription for videos without captions, and a Gemini pass-through that uses your own API key.
 
 ```mermaid
 flowchart LR
@@ -47,6 +47,15 @@ yt-dlp needs a JavaScript runtime to download from YouTube. If Deno is not insta
 
 ### 2. Get the code and check your setup
 
+Run it straight from GitHub, with no clone or install (npm downloads it on first use):
+
+```bash
+npx github:shivam098/video-deconstructor doctor
+npx github:shivam098/video-deconstructor overview "https://www.youtube.com/watch?v=HoKkasEyDOI"
+```
+
+Or clone it if you want to modify it or run the tests:
+
 ```bash
 git clone https://github.com/shivam098/video-deconstructor.git
 cd video-deconstructor
@@ -87,37 +96,42 @@ Then open the output folder in your agent and ask it to analyze the video, or co
 
 Add to your MCP client configuration. Use absolute paths.
 
-**GitHub Copilot CLI / app** (`~/.copilot/mcp-config.json`):
+**GitHub Copilot CLI / app** (`~/.copilot/mcp-config.json`). The simplest option runs it from GitHub with `npx`:
 
 ```json
 {
   "mcpServers": {
     "video-deconstructor": {
       "type": "local",
-      "command": "node",
-      "args": ["/absolute/path/to/video-deconstructor/bin/cli.mjs", "mcp"],
+      "command": "npx",
+      "args": ["-y", "github:shivam098/video-deconstructor", "mcp"],
       "tools": ["*"]
     }
   }
 }
 ```
 
+For a local clone, use `"command": "node"` and `"args": ["/absolute/path/to/video-deconstructor/bin/cli.mjs", "mcp"]`.
+
 **Claude Desktop** (`claude_desktop_config.json`), **Cursor** (`.cursor/mcp.json`) and **VS Code** (`.vscode/mcp.json`, key `servers` instead of `mcpServers`) use the same `command` / `args`.
 
 **Claude Code:**
 
 ```bash
-claude mcp add video-deconstructor -- node /absolute/path/to/video-deconstructor/bin/cli.mjs mcp
+claude mcp add video-deconstructor -- npx -y github:shivam098/video-deconstructor mcp
 ```
 
 Tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `check_environment` | Verify yt-dlp / ffmpeg / ffprobe, with install hints. |
+| `check_environment` | Verify yt-dlp / ffmpeg / ffprobe, Whisper and the Gemini key, with install hints. |
 | `deconstruct_video_overview` | Passes 1-2: everything in "What you get" for a whole video or a `start`-`end` section. |
 | `inspect_motion_or_transition` | Pass 3: high-fps sheets, motion curve and audio strip for a short window. |
 | `extract_highres_style_frames` | Native-resolution frames at given timestamps. |
+| `setup_whisper` | Optional: download a local Whisper model. |
+| `transcribe_audio` | Optional: local speech-to-text for videos without captions. |
+| `gemini_analyze_video` | Optional, needs your `GEMINI_API_KEY`: Gemini watches the video and writes its own analysis. |
 
 Every tool returns file paths. Agents that can open local files (Copilot, Claude Code, Cursor) view them directly. For clients that can't, such as Claude Desktop, pass `inline_images: N` to receive the first N images inline.
 
@@ -127,7 +141,41 @@ Copy or link `skills/video-production-deconstructor/` into your agent's skills f
 
 > *Break down how this Kurzgesagt video was animated and give me a recipe to recreate the opening in After Effects: https://www.youtube.com/watch?v=fEjvSbI_PT4*
 
-The skill tells the agent to run the overview, read the timeline and metrics, view the sheets and style frames, zoom into the motion hotspots, and report measured facts separately from inferences.
+The skill tells the agent to run the overview, read the timeline and metrics, view the sheets and style frames, zoom into the motion hotspots, and report measured facts separately from inferences. See [a complete example report](docs/examples/kurzgesagt-breakdown.md).
+
+## Optional add-ons
+
+Both add-ons are off by default; the core tool needs neither.
+
+### Local transcription with Whisper (free, offline)
+
+Many videos have no captions. Whisper is OpenAI's open-source speech-to-text model. It runs on your machine through [whisper.cpp](https://github.com/ggml-org/whisper.cpp): ffmpeg 8+ builds include it as the `whisper` filter (Gyan's Windows build does), or you can install `whisper-cli` (`brew install whisper-cpp`).
+
+```bash
+node bin/cli.mjs setup-whisper                    # one-time: downloads base.en (~142 MB)
+node bin/cli.mjs setup-whisper --model small      # multilingual; others: tiny(.en), base(.en), small(.en), medium(.en), large-v3-turbo
+node bin/cli.mjs transcribe <url|file> [--start T] [--end T] [--language hi] [--translate]
+node bin/cli.mjs overview <url|file> --transcribe always   # use Whisper even when captions exist
+```
+
+With a model installed, `overview` transcribes automatically whenever a video has no captions (`--transcribe auto`, the default). Transcripts are cached, so later `zoom` calls reuse them. On the test machine, `base.en` transcribed 60 s of narration in about 5 s, with output close to the uploader's subtitles.
+
+### Gemini native video understanding (your own API key)
+
+The local tools give the model measured cut data and still images. Gemini can watch the video itself, motion and sound included, and write its own analysis. `gemini_analyze_video` (CLI: `gemini`) adds that as a second opinion:
+
+```bash
+export GEMINI_API_KEY=...        # PowerShell: $env:GEMINI_API_KEY = "..."
+node bin/cli.mjs gemini "https://www.youtube.com/watch?v=HoKkasEyDOI"                   # default production-breakdown prompt
+node bin/cli.mjs gemini <url|file> --prompt "How is the map animation at 1:20 built?" --start 75 --end 95 --fps 8
+node bin/cli.mjs gemini <long-video-url> --agentic                                       # Gemini navigates long videos itself
+```
+
+- **Getting a key:** create one for free at [Google AI Studio](https://aistudio.google.com/apikey). The free tier needs no card but has rate limits (see [your limits](https://aistudio.google.com/rate-limit)).
+- **YouTube links** are passed to Gemini directly. They must be public, are in preview at no charge, and the free tier is capped at 8 hours of YouTube video per day. **Local files and other sites** are uploaded through the Gemini Files API (up to 2 GB per file on the free tier).
+- **Privacy:** on the free tier, Google may use submitted prompts and content to improve its products, including human review; paid-tier usage, and users in the EEA, Switzerland and the UK, are excluded. Don't send private or confidential videos on the free tier. See the [Gemini API terms](https://ai.google.dev/gemini-api/terms).
+- For MCP clients, set the key as an environment variable for the server (for example an `"env": { "GEMINI_API_KEY": "..." }` block in the MCP config), or set it in your user environment before starting the client. Don't commit keys to repositories.
+- The default model is `gemini-3.8-flash`; override it with `--model` or `VD_GEMINI_MODEL`. The result is saved as `gemini/gemini-<time>.md` in the run folder.
 
 ## CLI reference
 
@@ -136,8 +184,12 @@ node bin/cli.mjs doctor
 node bin/cli.mjs overview <url|file> [--start T] [--end T] [--fps N] [--max-sheets 12]
                           [--max-style-frames 12] [--threshold 0.3] [--soft-threshold 0.35]
                           [--grid 4x4] [--max-height 1080]
+                          [--transcribe auto|always|never] [--whisper-model M] [--language L] [--translate]
 node bin/cli.mjs zoom     <url|file> --start T --end T [--fps 8] [--grid 4x4] [--tile-width 640] [--max-frames 96]
 node bin/cli.mjs frames   <url|file> --timestamps T1,T2,... [--format jpg|png]
+node bin/cli.mjs setup-whisper [--model base.en]
+node bin/cli.mjs transcribe <url|file> [--start T] [--end T] [--model M] [--language L] [--translate]
+node bin/cli.mjs gemini   <url|file> [--prompt TEXT | --prompt-file F] [--model M] [--start T] [--end T] [--fps N] [--agentic]
 node bin/cli.mjs mcp
 ```
 
@@ -146,7 +198,7 @@ node bin/cli.mjs mcp
 - Long videos: analyze a section with `--start`/`--end`, or keep the default, which caps the overview at 12 storyboard sheets by lowering the sampling rate.
 - Downloads are cached per video, so `zoom` and `frames` after an `overview` don't download again.
 
-Environment variables: `VD_FFMPEG`, `VD_FFPROBE`, `VD_YTDLP` (binary paths), `VD_CACHE_DIR`, `VD_OUTPUT_DIR`, `VD_FONT` (TrueType font for timestamps), `VD_JS_RUNTIME` (yt-dlp `--js-runtimes` value), `VD_QUIET`.
+Environment variables: `VD_FFMPEG`, `VD_FFPROBE`, `VD_YTDLP` (binary paths), `VD_CACHE_DIR`, `VD_OUTPUT_DIR`, `VD_FONT` (TrueType font for timestamps), `VD_JS_RUNTIME` (yt-dlp `--js-runtimes` value), `VD_WHISPER_MODEL` (path to a GGML model), `VD_WHISPER_CLI` (path to `whisper-cli`), `GEMINI_API_KEY`, `VD_GEMINI_MODEL`, `VD_QUIET`.
 
 ## Tested on
 
@@ -169,14 +221,15 @@ Example output from *Spring* (© Blender Foundation, [CC BY 4.0](https://creativ
 ## Development
 
 ```bash
-npm test          # node --test: unit tests + synthetic-video pipeline tests + MCP protocol test
+npm test          # node --test: unit tests, synthetic-video pipeline tests, Whisper and Gemini (mock server) tests, MCP protocol test
 ```
 
-The pipeline tests generate a synthetic 5-second video with ffmpeg (a hard cut, a wipe, an audio gap and captions) and check every artifact. They are skipped automatically if ffmpeg is missing.
+The pipeline tests generate a synthetic 5-second video with ffmpeg (a hard cut, a wipe, an audio gap and captions) and check every artifact. The Whisper tests synthesize speech with ffmpeg's `flite` source and run real transcription; they are skipped if no model is installed. The Gemini tests run against a local mock of the API, so they need no key. Tests needing ffmpeg are skipped automatically if it is missing.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): modules, analysis pipeline, ffmpeg recipes, output layout.
 - [docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md): design decisions, problems found during testing and their fixes, limitations, ideas.
 - [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md): genre validation results.
+- [docs/examples/kurzgesagt-breakdown.md](docs/examples/kurzgesagt-breakdown.md): a complete three-pass "how it was made" report produced by an agent with these tools.
 
 ## Troubleshooting
 
@@ -188,6 +241,8 @@ The pipeline tests generate a synthetic 5-second video with ffmpeg (a hard cut, 
 | No timestamps on contact sheets / drawtext font error | Set `VD_FONT` to a `.ttf` file. |
 | Section download is slow | Accurate section cuts re-encode the clip. For short videos, omit `--start`/`--end`. |
 | Too many or too few cuts | Adjust `--threshold` (hard cuts) and `--soft-threshold` (dissolves/wipes; `0` disables). |
+| `No Whisper backend found` | Install an ffmpeg 8+ build with the `whisper` filter, or whisper.cpp's `whisper-cli` (set `VD_WHISPER_CLI`). |
+| Gemini `HTTP 429` | Free-tier rate limit or daily YouTube cap reached. Wait, or check your limits in AI Studio. |
 
 ## Responsible use
 

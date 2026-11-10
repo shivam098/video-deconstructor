@@ -27,6 +27,8 @@ flowchart LR
 | `src/binaries.mjs` | Finds working `yt-dlp` / `ffmpeg` / `ffprobe` binaries, fonts and cache paths. |
 | `src/metrics.mjs` | Pure functions: hard cuts, soft transitions, pacing statistics, visual activity, style-frame selection. |
 | `src/timeline.mjs` | Pure functions: caption parsing (VTT/SRT, YouTube rolling captions) and the A/V timeline. |
+| `src/transcribe.mjs` | Optional Whisper speech-to-text: model download, backend detection (ffmpeg `whisper` filter or `whisper-cli`), transcription. |
+| `src/gemini.mjs` | Optional Gemini pass-through: Files API upload, Interactions API call, polling, response parsing. |
 | `src/util.mjs` | Process runner, time parsing/formatting, ffmpeg filter escaping. |
 
 ## Pipeline details
@@ -90,6 +92,25 @@ Uses:
 ```
 
 The CLI writes to `./vd-output/<key>` by default; the MCP server writes to `<cache>/runs/<key>`. Both honour `--out` / `output_dir` and `VD_OUTPUT_DIR`.
+
+## Optional add-ons
+
+### Whisper transcription (`transcribe.mjs`)
+
+- **Backend:** ffmpeg's `whisper` filter (FFmpeg 8+ built with whisper.cpp) is preferred, because it adds no extra binary:
+  `aformat=sample_rates=16000:channel_layouts=mono,whisper=model=...:language=...:queue=20:destination=out.srt:format=srt`.
+  If GPU initialisation fails, it is retried with `use_gpu=false`. Otherwise the tool extracts a 16 kHz mono WAV and runs `whisper-cli -osrt`.
+- **Models:** whisper.cpp GGML files from `huggingface.co/ggerganov/whisper.cpp`, downloaded to `<cache>/models/` by `setup-whisper`. Each file is checked for the GGML magic number. `VD_WHISPER_MODEL` points to a custom model.
+- **When it runs:** `overview` with `transcribe=auto` (default) transcribes only if the analyzed range has no captions and a model is installed; `always` overrides existing captions; `never` disables it. Without a model, the manifest carries a `narrationNote` with the setup command.
+- **Caching:** transcripts are stored as `<cache>/transcripts/<key>__<model>__<lang>__<range>.json` with absolute timestamps, so `zoom` reuses them for any overlapping window.
+
+### Gemini pass-through (`gemini.mjs`)
+
+- **Endpoint:** Gemini Interactions API, `POST /v1beta/interactions` with `input: [{type: "video", ...}, {type: "text", text: prompt}]`, authenticated with the `x-goog-api-key` header from `GEMINI_API_KEY`. The key is never logged or written to disk.
+- **YouTube URLs** are passed as `{type: "video", uri}`. **Local files and other URLs** (downloaded via the normal cache first) are streamed to the resumable Files API (`/upload/v1beta/files`), which is polled until `ACTIVE`. Containers Gemini doesn't accept are converted to H.264 MP4 first.
+- **Options:** `start`/`end`/`fps` become `processing: {type: "static", start_offset, end_offset, fps}`. `agentic` sets `processing: "agentic"` and runs the request with `background: true`, polling `GET /v1beta/interactions/{id}`.
+- **Responses:** text is read from `output_text`, `steps[type=model_output]`, `outputs` or `candidates`, and saved as Markdown with the model, mode and prompt. Error messages explain 429 (quota) and bad keys.
+- **Testing:** `VD_GEMINI_BASE_URL` redirects all calls; the test suite uses it to run against a local mock server.
 
 ## Binary resolution (`binaries.mjs`)
 

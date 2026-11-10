@@ -17,9 +17,10 @@ test('parseTime / fmtTime', () => {
   assert.equal(fmtTime(59.9996, { ms: false }), '01:00');
 });
 
-test('filterValue escapes colons and strips quotes', () => {
-  assert.equal(filterValue('C:\\Windows\\Fonts\\arial.ttf'), "'C\\:/Windows/Fonts/arial.ttf'");
-  assert.equal(filterValue("it's 00:10"), "'its 00\\:10'");
+test('filterValue escapes for the option and filtergraph parsers', () => {
+  assert.equal(filterValue('C:\\Windows\\Fonts\\arial.ttf'), 'C\\\\:/Windows/Fonts/arial.ttf');
+  assert.equal(filterValue("it's 00:10"), "it\\\\\\'s 00\\\\:10");
+  assert.equal(filterValue('a,b;[c]'), 'a\\,b\\;\\[c\\]');
 });
 
 test('youtubeId handles common URL shapes', () => {

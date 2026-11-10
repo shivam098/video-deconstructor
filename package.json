@@ -1,6 +1,6 @@
 {
   "name": "video-deconstructor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reverse-engineer how any video is made (editing pace, A/V sync, motion, design, sound) by turning it into contact sheets, style frames, an audio strip and an A/V script that any multimodal LLM can read. CLI + MCP server + agent skill.",
   "type": "module",
   "bin": {

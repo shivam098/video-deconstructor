@@ -17,8 +17,15 @@ Prefer the MCP tools. If they are unavailable, run the CLI from the repository r
 | `deconstruct_video_overview` | `overview <src>` | Passes 1-2. Run once per video (optionally `start`/`end` to analyze one section of a long video). |
 | `inspect_motion_or_transition` | `zoom <src> --start --end --fps` | Pass 3. 2-10 s windows at 6-12 fps. |
 | `extract_highres_style_frames` | `frames <src> --timestamps` | Full-resolution stills for design detail. |
+| `transcribe_audio` | `transcribe <src>` | Optional. Local Whisper speech-to-text when a video has no captions (needs `setup_whisper` once). |
+| `gemini_analyze_video` | `gemini <src>` | Optional, needs the user's `GEMINI_API_KEY`. Gemini watches the video (motion + audio) and writes its own analysis. |
 
 Downloads are cached, so follow-up `zoom`/`frames` calls on the same URL are fast.
+
+### Optional add-ons
+
+- **No captions?** The overview's `summary.narrationNote` says so. If `check_environment` shows Whisper is ready, the overview has already transcribed the audio. Otherwise, offer to run `setup_whisper` (a one-time download of about 142 MB), then re-run the overview or call `transcribe_audio`.
+- **Gemini** is a second opinion, not a replacement. Use it only if the user asks or agrees, because it sends the video to Google (on the free tier, Google may use it to improve its products). Its observations are not measurements: prefer the measured cut times and pacing from the overview, and use Gemini for things frames can't show well, such as continuous motion, lip sync and how sound effects land. Point it at specific windows with `start`/`end`/`fps` for detailed questions.
 
 ## What the overview produces
 
@@ -72,5 +79,5 @@ Pick 2-4 windows: `motionHotspots` from the manifest, soft transitions from the 
 - Separate **measured** facts (cut times, shot lengths, silences, timestamps visible on tiles) from **inferred** claims (software used, technique names, intent). Label inferences as such; tools and plugins can rarely be identified with certainty.
 - Cite timestamps for every claim about the video.
 - Scene detection is a heuristic. Very fast motion can register as a soft transition, and slow dissolves can be missed. Confirm important cuts on the contact sheets or with a zoom before relying on them.
-- If there are no captions, say the narration analysis is unavailable rather than guessing what is said.
+- If there are no captions and no Whisper transcript, say the narration analysis is unavailable rather than guessing what is said.
 - Respect copyright and the platform's terms: analyze for learning and critique, and do not redistribute downloaded media.
