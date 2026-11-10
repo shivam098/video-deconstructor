@@ -1,0 +1,171 @@
+import fs from 'node:fs';
+import readline from 'node:readline';
+import { overview, zoom, frames, VERSION } from './engine.mjs';
+import { checkEnvironment } from './binaries.mjs';
+
+const source = { type: 'string', description: 'YouTube (or any yt-dlp supported) URL, or a local video file path.' };
+const time = { type: ['string', 'number'], description: 'Seconds (75.5) or timestamp (MM:SS.mmm / HH:MM:SS).' };
+const outputDir = { type: 'string', description: 'Optional folder for the outputs. Defaults to the per-user cache (see check_environment.cacheRoot).' };
+const inlineImages = {
+  type: 'integer', minimum: 0, maximum: 8, default: 0,
+  description: 'Also return up to N generated images inline (base64). Use when your client cannot open local files; otherwise open the returned paths with your image/file viewer.',
+};
+
+export const TOOLS = [
+  {
+    name: 'check_environment',
+    description: 'Check that yt-dlp, ffmpeg and ffprobe are installed and working (broken or blocked builds are reported), and show install commands for this OS.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'deconstruct_video_overview',
+    description: 'Pass 1+2 of a video production breakdown. Downloads/caches the video, detects every editorial cut, computes pacing (shot lengths, cuts/min), finds motion hotspots and silences, and writes: av-timeline.md (narration per shot), pacing-metrics.json, timestamped storyboard contact sheets, full-resolution style frames and an audio waveform+spectrogram strip with cut markers. Returns file paths: open the images to analyze style, motion and editing.',
+    inputSchema: {
+      type: 'object',
+      required: ['source'],
+      properties: {
+        source,
+        start: { ...time, description: 'Optional start of the range to analyze (only that section is downloaded).' },
+        end: { ...time, description: 'Optional end of the range to analyze.' },
+        overview_fps: { type: 'number', description: 'Storyboard sampling rate. Default: auto (<=1 fps, capped by max_sheets).' },
+        max_sheets: { type: 'integer', minimum: 1, maximum: 60, default: 12, description: 'Maximum number of storyboard contact sheets.' },
+        max_style_frames: { type: 'integer', minimum: 0, maximum: 60, default: 12, description: 'Full-resolution frames to capture (one per representative shot).' },
+        scene_threshold: { type: 'number', minimum: 0.05, maximum: 0.9, default: 0.3, description: 'Scene-change score needed to count a hard cut. Lower for soft cuts, higher for busy footage.' },
+        soft_threshold: { type: 'number', minimum: 0, maximum: 0.9, default: 0.35, description: 'Score (frames 0.25 s apart) needed to count a gradual transition such as a dissolve or wipe. 0 disables soft transitions.' },
+        grid: { type: 'string', default: '4x4', description: 'Contact sheet layout COLSxROWS.' },
+        max_height: { type: 'integer', default: 1080, description: 'Maximum download resolution.' },
+        output_dir: outputDir,
+        inline_images: inlineImages,
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'inspect_motion_or_transition',
+    description: 'Pass 3: zoom into a short window (ideally 2-10 s) at high frame rate (default 8 fps) to reverse-engineer a transition, animation, camera move or easing curve. Returns timestamped contact sheets, a per-frame motion curve, cuts, narration and an audio strip for the window.',
+    inputSchema: {
+      type: 'object',
+      required: ['source', 'start', 'end'],
+      properties: {
+        source,
+        start: time,
+        end: time,
+        fps: { type: 'number', minimum: 0.5, maximum: 60, default: 8, description: 'Tiles per second of video.' },
+        grid: { type: 'string', default: '4x4', description: 'Contact sheet layout COLSxROWS.' },
+        tile_width: { type: 'integer', default: 640, description: 'Width of each tile in pixels.' },
+        max_frames: { type: 'integer', default: 96, description: 'Cap on tiles; fps is reduced if the window would exceed it.' },
+        output_dir: outputDir,
+        inline_images: inlineImages,
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'extract_highres_style_frames',
+    description: 'Extract full-resolution frames at exact timestamps to study typography, colour palette, textures, lighting and layer composition.',
+    inputSchema: {
+      type: 'object',
+      required: ['source', 'timestamps'],
+      properties: {
+        source,
+        timestamps: { type: 'array', items: time, minItems: 1, maxItems: 40 },
+        format: { type: 'string', enum: ['jpg', 'png'], default: 'jpg' },
+        output_dir: outputDir,
+        inline_images: inlineImages,
+      },
+      additionalProperties: false,
+    },
+  },
+];
+
+function imageContent(paths, n) {
+  return paths.filter(Boolean).slice(0, n).flatMap((p) => {
+    try {
+      return [{ type: 'image', data: fs.readFileSync(p).toString('base64'), mimeType: p.endsWith('.png') ? 'image/png' : 'image/jpeg' }];
+    } catch { return []; }
+  });
+}
+
+export async function callTool(name, args = {}) {
+  const n = Math.max(0, Math.min(8, Number(args.inline_images) || 0));
+  let result;
+  let images = [];
+  switch (name) {
+    case 'check_environment':
+      result = await checkEnvironment();
+      break;
+    case 'deconstruct_video_overview':
+      result = await overview(args.source, {
+        start: args.start, end: args.end, overviewFps: args.overview_fps, maxSheets: args.max_sheets,
+        maxStyleFrames: args.max_style_frames, sceneThreshold: args.scene_threshold, softThreshold: args.soft_threshold, grid: args.grid,
+        maxHeight: args.max_height, outputDir: args.output_dir,
+      });
+      images = [result.artifacts.audioStrip, ...result.artifacts.contactSheets.map((s) => s.file), ...result.artifacts.styleFrames.map((f) => f.path)];
+      break;
+    case 'inspect_motion_or_transition':
+      result = await zoom(args.source, {
+        start: args.start, end: args.end, fps: args.fps, grid: args.grid, tileWidth: args.tile_width,
+        maxFrames: args.max_frames, outputDir: args.output_dir,
+      });
+      images = [...result.artifacts.contactSheets.map((s) => s.file), result.artifacts.audioStrip];
+      break;
+    case 'extract_highres_style_frames':
+      result = await frames(args.source, { timestamps: args.timestamps, format: args.format, outputDir: args.output_dir });
+      images = result.frames.map((f) => f.path);
+      break;
+    default:
+      throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });
+  }
+  return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }, ...imageContent(images, n)] };
+}
+
+/** Minimal MCP server over stdio (newline-delimited JSON-RPC 2.0), no dependencies. */
+export function startMcpServer({ input = process.stdin, output = process.stdout } = {}) {
+  process.env.VD_MCP = '1';
+  const send = (msg) => output.write(`${JSON.stringify(msg)}\n`);
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+
+  rl.on('line', async (line) => {
+    if (!line.trim()) return;
+    let msg;
+    try { msg = JSON.parse(line); } catch {
+      send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+      return;
+    }
+    const { id, method, params } = msg;
+    const reply = (result) => id !== undefined && send({ jsonrpc: '2.0', id, result });
+    const fail = (code, message) => id !== undefined && send({ jsonrpc: '2.0', id, error: { code, message } });
+    try {
+      switch (method) {
+        case 'initialize':
+          reply({
+            protocolVersion: params?.protocolVersion || '2025-06-18',
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: 'video-deconstructor', version: VERSION },
+            instructions: 'Use deconstruct_video_overview first, then open the returned images/files. Zoom into motion hotspots with inspect_motion_or_transition and capture detail frames with extract_highres_style_frames.',
+          });
+          break;
+        case 'ping':
+          reply({});
+          break;
+        case 'tools/list':
+          reply({ tools: TOOLS });
+          break;
+        case 'tools/call':
+          try {
+            reply(await callTool(params?.name, params?.arguments || {}));
+          } catch (e) {
+            if (e.rpcCode) fail(e.rpcCode, e.message);
+            else reply({ isError: true, content: [{ type: 'text', text: `Error: ${e.message}` }] });
+          }
+          break;
+        default:
+          if (method?.startsWith('notifications/')) break;
+          fail(-32601, `Method not found: ${method}`);
+      }
+    } catch (e) {
+      fail(-32603, e.message);
+    }
+  });
+  rl.on('close', () => process.exit(0));
+}

@@ -1,99 +1,108 @@
-# Technical Architecture — `video-deconstructor`
+# Architecture
 
-## 1. Problem Statement
+`video-deconstructor` is a small Node.js (>= 18) program with **no npm dependencies**. It shells out to three external tools and turns a video into files that a multimodal model can read.
 
-General-purpose multimodal LLMs (such as **Gemini 4 Argon**, Claude Opus, and GPT-6) excel at spatial reasoning, visual design critique, and code/blueprint generation—but coding environments only expose **static file and image inspection tools** (`view`).
-
-If you only extract a few random screenshots from a video, the model is blind to:
-1. **Temporal continuity & motion physics:** Camera paths, Z-space parallax, object trajectories, and keyframe easing curves (ease-in, ease-out, overshoot/spring).
-2. **Editorial rhythm:** Cut frequency, shot-length progression (accelerating cuts to build tension vs. long holds for comprehension), and match cuts.
-3. **Audio-visual choreography:** How spoken words, music swells, risers, whooshes, and tactile foley (paper rustles, camera shutters, keyboard clicks) trigger visual state changes.
-4. **Compositing & layer hierarchy:** How background textures (halftone dots, paper grain, vignettes), midground archival assets, and foreground kinetic typography are stacked and blended.
-
-`video-deconstructor` solves this by translating a raw video file or YouTube stream into **five complementary visual and structured-text artifacts** specifically engineered for multimodal LLM context windows.
-
----
-
-## 2. The Five Deconstruction Artifacts
-
-Every run of `deconstruct_video_overview` creates a deterministic workspace folder (`<output-dir>/<video-id>/`) containing:
-
-### Artifact 1: `manifest.json` & `pacing-metrics.json` (Editorial Telemetry)
-Computed via `ffprobe` and `ffmpeg` scene-change filter (`select='gt(scene,0.25)',showinfo`):
-- **Video Specs:** Title, channel/uploader, resolution, native frame rate, codec, duration, and chapter markers.
-- **Cut List:** Array of every detected editorial cut `{ cutIndex, timestampSec, timestampHMS, sceneScore, shotDurationSec }`.
-- **Pacing Summary:**
-  - `totalCuts`
-  - `averageShotLengthSec` (ASL)
-  - `medianShotLengthSec`
-  - `cutsPerMinute` (CPM)
-  - `shotLengthDistribution`: buckets (`<1.5s fast/montage`, `1.5s–3.5s standard explainer`, `3.5s–7s graphic build`, `>7s deep sequence`)
-  - `pacingByChapter`: how cut density changes from the Hook to the Body and Outro.
-
-### Artifact 2: `av-timeline.md` (Two-Column Synced A/V Script)
-Merges `yt-dlp` subtitles/auto-captions (`.vtt` / `.json3`) with the `ffmpeg` scene-cut list and chapter markers into a single readable Markdown table:
-
-| Time (`MM:SS.ms`) | Audio / Narration | Visual Cut / Scene Event | Shot Length |
-| :--- | :--- | :--- | :--- |
-| `00:00.00` | *"Why do every airline's route maps look like this?"* | **[CUT #1]** Opening hook (`style-frames/scene_001.jpg`) | `2.4s` |
-| `00:02.40` | *"In 1978, the US government..."* | **[CUT #2]** Archival newspaper highlight zoom (`scene_002.jpg`, score `0.48`) | `3.1s` |
-
-This allows the LLM to see **exact word-to-cut choreography** before even opening an image.
-
-### Artifact 3: `contact-sheets/sheet_NNN.jpg` (Timestamped Motion Grids)
-Generated via `ffmpeg` filtergraph:
-```text
-fps=<sample_fps>,scale=480:-1,drawtext=text='%{pts\:hms}':x=8:y=8:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.65,tile=4x4:padding=4:margin=4
+```mermaid
+flowchart LR
+    S[URL or local file] --> A[acquire<br/>yt-dlp + cache]
+    A --> P[ffprobe<br/>duration, fps, streams]
+    P --> G[analyzeSignal<br/>one ffmpeg decode pass]
+    G --> M[metrics<br/>cuts, shots, pacing, activity]
+    A --> C[captions<br/>VTT/SRT parser]
+    M --> R1[contact sheets]
+    M --> R2[style frames]
+    M --> R3[audio strip]
+    M & C --> R4[av-timeline.md]
+    M --> R5[pacing-metrics.json]
+    R1 & R2 & R3 & R4 & R5 --> O[manifest.json]
 ```
-- Each image shows **16 consecutive frames in a `4x4` grid** with the exact timestamp (`HH:MM:SS.mmm`) burned into the top-left corner of every tile.
-- **Why `4x4` grids work for LLMs:** Instead of loading 16 separate tool calls, the model views one `1920x1080` composite image and immediately perceives **frame-to-frame motion deltas**:
-  - Camera push-ins, pans, orbits, and 2.5D parallax depth separation.
-  - How a chart draws itself over 3 seconds (axes $\rightarrow$ gridlines $\rightarrow$ data curve $\rightarrow$ callout highlight).
-  - Keyframe spacing (large spatial jumps followed by tiny increments = ease-out deceleration).
 
-### Artifact 4: `style-frames/scene_NNN.jpg` (Full-Resolution Craft & Layer Frames)
-While `4x4` contact sheets compress each tile to `480px` width for motion tracking, `style-frames/` captures **unscaled (`1080p`/`4K`) single frames** at key scene transitions or requested timestamps.
-- Enables inspection of:
-  - **Typography:** Serif vs. grotesque sans-serif pairings, kerning, stroke outlines, drop shadows.
-  - **Textures & Treatments:** Halftone dot patterns, paper creases, film grain, chromatic aberration,CRT scanlines, vignette falloff.
-  - **Color System:** Background canvas tones (e.g., Vox warm off-white `#F4F1EA` or Bloomberg dark terminal slate), accent highlight colors, and contrast hierarchy.
-  - **3D Rendering:** Material roughness, subsurface scattering, ambient occlusion, volumetric fog, and key/fill/rim lighting setup.
+## Modules
 
-### Artifact 5: `audio-visual-strip/waveform_spectrum.png` (Sound Design Map)
-Generated via `ffmpeg`:
-- Top half: stereo/mono **amplitude waveform** (`showwavespic=s=1920x240:split_channels=0`) showing narration envelopes, transient SFX spikes (whooshes, hits, clicks), and silence gaps.
-- Bottom half: **frequency spectrogram** (`showspectrumpic=s=1920x360:legend=1`) showing sub-bass drops, mid-range voice presence, and high-frequency risers/cymbal swells.
+| File | Responsibility |
+| --- | --- |
+| `bin/cli.mjs` | Command-line entry point (`doctor`, `overview`, `zoom`, `frames`, `mcp`). |
+| `src/mcp-server.mjs` | MCP server: newline-delimited JSON-RPC 2.0 over stdio, four tools. |
+| `src/engine.mjs` | Pipelines (`overview`, `zoom`, `frames`), media acquisition and caching, ffmpeg rendering. |
+| `src/binaries.mjs` | Finds working `yt-dlp` / `ffmpeg` / `ffprobe` binaries, fonts and cache paths. |
+| `src/metrics.mjs` | Pure functions: hard cuts, soft transitions, pacing statistics, visual activity, style-frame selection. |
+| `src/timeline.mjs` | Pure functions: caption parsing (VTT/SRT, YouTube rolling captions) and the A/V timeline. |
+| `src/util.mjs` | Process runner, time parsing/formatting, ffmpeg filter escaping. |
 
----
+## Pipeline details
 
-## 3. MCP Server Tool Specifications (`src/mcp-server.mjs`)
+### 1. Acquisition and caching (`engine.mjs`)
 
-The MCP server communicates over `stdio` using JSON-RPC 2.0:
+- **URLs** go through yt-dlp: one call for metadata (`--dump-single-json`), one for English captions (uploader subtitles preferred, auto-captions otherwise), one for the media. Format preference is H.264 + AAC up to `max_height` (default 1080p) so decoding stays fast.
+- **Sections**: when `start`/`end` are given, only that range (plus 1 s padding) is downloaded with `--download-sections` and `--force-keyframes-at-cuts`, so long videos can be analyzed piecemeal.
+- **Cache**: `<cache>/media/<extractor>-<id>/` holds `source.json`, captions and downloads. A later request reuses any download that covers the requested range. YouTube URLs map straight to their video ID. Other sites are looked up in `<cache>/media/url-index.json`, so repeated calls skip the metadata request too. Timestamps everywhere are **absolute** positions in the original video; section offsets are handled internally.
+- **Local files** need no network. Captions are taken from `--captions` or a sidecar file with the same base name (`clip.mp4` + `clip.vtt`/`clip.srt`/`clip.en.vtt`).
 
-### `check_environment`
-- **Arguments:** `{}`
-- **Returns:** JSON status of `yt-dlp`, `ffmpeg`, and `ffprobe` binaries, versions, and OS-appropriate installation commands if any are missing.
+### 2. Signal analysis: one decode pass (`analyzeSignal`)
 
-### `deconstruct_video_overview`
-- **Arguments:**
-  - `source` (`string`, required): YouTube URL or local file path.
-  - `output_dir` (`string`, optional): Custom output folder (defaults to `<os.tmpdir()>/video-deconstructor/<id>`).
-  - `overview_fps` (`number`, optional, default `1`): Frame sampling rate for overview `4x4` contact sheets.
-  - `scene_threshold` (`number`, optional, default `0.28`): `ffmpeg` scene-detection threshold (`0.15`–`0.50`).
-  - `max_style_frames` (`number`, optional, default `12`): Maximum full-resolution style frames to extract automatically.
-- **Returns:** Paths to `manifest.json`, `pacing-metrics.json`, `av-timeline.md`, `waveform_spectrum.png`, `contact-sheets/*.jpg`, and `style-frames/*.jpg`.
+```text
+[0:v] scale=256 -> split -> scdet=threshold=100, metadata@fine=print          (every frame)
+                         -> fps=4, scdet=threshold=100, metadata@coarse=print (frames 0.25 s apart)
+[0:a] silencedetect=n=-35dB:d=0.35
+```
 
-### `inspect_motion_or_transition`
-- **Arguments:**
-  - `source` (`string`, required): YouTube URL, local file path, or cached video ID.
-  - `start_time` (`string` | `number`, required): Start timestamp (`MM:SS.ms` or seconds).
-  - `end_time` (`string` | `number`, required): End timestamp (`MM:SS.ms` or seconds).
-  - `fps` (`number`, optional, default `8`): High-density sampling rate (`4`–`15` FPS) to capture fast transitions and easing curves.
-  - `grid` (`string`, optional, default `"4x4"`): Contact sheet layout (`"4x4"`, `"3x3"`, or `"2x2"`).
-- **Returns:** High-FPS timestamped contact sheets and optional individual frames for the target window, plus an audio waveform slice for that exact transition.
+`scdet` emits two values per frame:
 
-### `extract_highres_style_frames`
-- **Arguments:**
-  - `source` (`string`, required): YouTube URL, local file path, or cached video ID.
-  - `timestamps` (`array<string|number>`, required): List of exact timestamps to capture at native resolution.
-- **Returns:** File paths to full-resolution `.jpg`/`.png` frames.
+- **MAFD**: mean absolute frame difference, in percent of full scale. It measures *how much changed*.
+- **score**: `min(MAFD, |MAFD - previous MAFD|)`. It spikes only when the amount of change itself jumps, which is what a cut looks like; steady motion keeps it low. The tool converts it to the scale of ffmpeg's `select` `scene` value (`score x 2.56 / 100`, clipped to 1), so the thresholds below read on a 0-1 scale.
+
+Uses:
+
+- **Hard cuts**: per-frame score >= `scene_threshold` (0.3); cuts closer than 0.25 s are merged.
+- **Soft transitions**: dissolves, wipes and whip pans change the image gradually, so consecutive frames differ little. On the coarse branch (frames 0.25 s apart), a score >= `soft_threshold` (0.35) with no hard cut nearby is recorded as a soft transition.
+- **Visual activity**: mean coarse-branch **MAFD** per second, skipping samples that span a cut. Because the frames are a fixed 0.25 s apart, it doesn't depend on the video's frame rate. Units are MAFD % (roughly `<0.3` for a still image or thin elements on a plain background, `1-5` for moderate motion, `>10` for fast motion). `motionHotspots` are the busiest non-overlapping 3 s windows, suggested as Pass 3 targets. `lowMotionShare` is the fraction of seconds below 0.3.
+- **Zoom motion curve**: per-frame MAFD and score at native frame rate, used for reading easing (a decaying MAFD is ease-out) and spotting flashes.
+- **Silences**: periods quieter than -35 dBFS for at least 0.35 s, which catch music drops and pauses before reveals.
+
+### 3. Metrics (`metrics.mjs`)
+
+- Shots are the spans between consecutive cuts (hard or soft). Each shot records how it was entered.
+- Pacing: average and median shot length, cuts per minute, a shot-length distribution (`<1.5 s`, `1.5-3.5 s`, `3.5-7 s`, `>=7 s` with runtime share), per-chapter pacing when the video has chapters (otherwise fixed segments), and the longest and shortest shots.
+- `narrationSync`: the share of cuts within 0.5 s of a caption line starting. This is approximate because caption timing is coarse.
+
+### 4. Rendering (`engine.mjs`)
+
+| Artifact | ffmpeg recipe |
+| --- | --- |
+| Contact sheets | `fps=N, scale=W:-2, drawtext=%{pts:hms:OFFSET}, tile=4x4` (the timestamp offset makes labels absolute). Overview fps defaults to `min(1, 16 x max_sheets / duration)` with a floor of 0.02 fps. |
+| Style frames | Input-seek (`-ss`) to the midpoint of evenly spread shots, one native-resolution frame each. When there are fewer shots than `max_style_frames`, extra frames are taken inside long shots, at least 4 s apart. |
+| Audio strip | `asplit` -> `showwavespic` + `showspectrumpic`, plus a `color` source with `drawtext` tick labels, all stacked with `vstack`. Every cut is drawn: markers are merged per pixel column (red wins over orange) and overlapping silences are merged. Graphs over 8,000 characters are passed as a script file (`-/filter_complex` on ffmpeg 7+, `-filter_complex_script` before that) to stay under the Windows command-line limit. |
+| Zoom | The same contact-sheet recipe at 4-15 fps over a short window, plus an audio strip and a per-frame motion curve (`zoom.json`). |
+
+### 5. Outputs
+
+```text
+<run dir>/
+  manifest.json          summary, metadata, every artifact path, suggested next steps
+  av-timeline.md         one row per shot: entry type, time, length, narration, silences, style frame link
+  pacing-metrics.json    shots, cuts, pacing, silences, narrationSync, visualActivity
+  captions.json          parsed caption lines (if any)
+  audio-strip.png        waveform + spectrogram + cut/silence markers + time ruler
+  contact-sheets/        sheet_001.jpg ...
+  style-frames/          style_01_<time>.jpg ...
+  zoom/<start>_<end>_<fps>fps/   sheet_*.jpg, audio-strip.png, zoom.json
+  frames/                frame_01_<time>.jpg ...
+```
+
+The CLI writes to `./vd-output/<key>` by default; the MCP server writes to `<cache>/runs/<key>`. Both honour `--out` / `output_dir` and `VD_OUTPUT_DIR`.
+
+## Binary resolution (`binaries.mjs`)
+
+Every candidate binary is **executed** (`-version` / `--version`) before use, and the first one that works wins. This was added after real-world failures (see [HOW-IT-WAS-BUILT.md](HOW-IT-WAS-BUILT.md)): a crashing ARM64 nightly ffmpeg sat first on `PATH`, and yt-dlp was blocked by Windows Application Control.
+
+Search order: `VD_FFMPEG` / `VD_FFPROBE` / `VD_YTDLP` environment variables, then `PATH`, then well-known locations (WinGet packages and links, Scoop, Chocolatey, Homebrew, `/usr/bin`, `~/.local/bin`), then `python -m yt_dlp` for yt-dlp. Rejected candidates and the reasons are reported by `doctor` / `check_environment`.
+
+On Windows, yt-dlp runs with `TMP`/`TEMP` pointed at `<cache>/runtime-tmp`, because PyInstaller unpacks DLLs into `%TEMP%`, which many device policies block.
+
+yt-dlp needs a JavaScript runtime to solve YouTube's player challenges. Deno is used if installed; otherwise the tool passes `--js-runtimes node:<current node>`. Override this with `VD_JS_RUNTIME`.
+
+## MCP server
+
+The server is a dependency-free implementation of the MCP stdio transport. It handles `initialize`, `ping`, `tools/list`, `tools/call` and ignores notifications. Tool errors are returned as `isError: true` results so the model can see and react to them; protocol errors use JSON-RPC error codes. Logs go to stderr only.
+
+All tools accept `inline_images: N` to also return the first N images as base64 `image` content, for clients that cannot open local files.

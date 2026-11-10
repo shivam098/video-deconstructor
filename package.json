@@ -1,0 +1,40 @@
+{
+  "name": "video-deconstructor",
+  "version": "0.1.0",
+  "description": "Reverse-engineer how any video is made (editing pace, A/V sync, motion, design, sound) by turning it into contact sheets, style frames, an audio strip and an A/V script that any multimodal LLM can read. CLI + MCP server + agent skill.",
+  "type": "module",
+  "bin": {
+    "video-deconstructor": "bin/cli.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/",
+    "doctor": "node bin/cli.mjs doctor"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "video-analysis",
+    "ffmpeg",
+    "yt-dlp",
+    "multimodal",
+    "copilot",
+    "claude",
+    "motion-graphics",
+    "editing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shivam098/video-deconstructor.git"
+  },
+  "license": "MIT"
+}

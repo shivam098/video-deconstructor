@@ -1,91 +1,76 @@
 ---
 name: video-production-deconstructor
-description: Reverse-engineer how any YouTube or local video is made—including Vox and Bloomberg explainers, 2D/2.5D motion graphics, 3D animations, kinetic typography, data visualizations, editorial pacing, sound design sync, and transitions. Use whenever asked to analyze a video's production style, animation techniques, editing rhythm, visual craft, or how to recreate a video.
+description: Reverse-engineer how a YouTube or local video was made - editing pace, narration-to-picture sync, visual design system, motion/animation technique, transitions and sound design - and produce a recreation blueprint. Use when asked to analyze a video's production style, how an animation or transition was built, why a video's pacing works, or how to make a video "like this one" (e.g. Vox, Bloomberg, Kurzgesagt, 3Blue1Brown, 3D shorts, documentaries).
 ---
 
-# Video Production & Craft Deconstructor (`video-production-deconstructor`)
+# Video production deconstructor
 
-Use this skill to deconstruct **how any video was created**—across narrative structure, editorial pacing, audio-visual synchronization, graphic design/layer composition, 2D/2.5D/3D motion mechanics, and sound design—using the local `video-deconstructor` MCP tools or CLI together with the `view` tool.
+Models cannot watch a video file. This skill uses the `video-deconstructor` tools to turn a video into artifacts you *can* read, then walks through them in three passes.
 
----
+## Tools
 
-## Core Principle: Never Guess From Metadata Alone
+Prefer the MCP tools. If they are unavailable, run the CLI from the repository root (`node bin/cli.mjs ...`; add `--json` for machine-readable output).
 
-A video's craft lives in the **relationship between time, motion, layer depth, and sound**. Always inspect the generated visual and timeline artifacts in **three structured passes**:
+| MCP tool | CLI | Use |
+| --- | --- | --- |
+| `check_environment` | `doctor` | Verify yt-dlp / ffmpeg / ffprobe before anything else if a call fails. |
+| `deconstruct_video_overview` | `overview <src>` | Passes 1-2. Run once per video (optionally `start`/`end` to analyze one section of a long video). |
+| `inspect_motion_or_transition` | `zoom <src> --start --end --fps` | Pass 3. 2-10 s windows at 6-12 fps. |
+| `extract_highres_style_frames` | `frames <src> --timestamps` | Full-resolution stills for design detail. |
 
-1. **Pass 1 — Macro Editorial, Narrative & Sound Architecture** (`av-timeline.md` + `pacing-metrics.json` + `waveform_spectrum.png` + `1 FPS` overview contact sheets)
-2. **Pass 2 — Visual Direction, Typography & Layer Stack** (Full-resolution `style-frames/scene_NNN.jpg`)
-3. **Pass 3 — Micro Motion, Camera Rigs & Transition Physics** (`6–15 FPS` high-density contact sheets via `inspect_motion_or_transition`)
+Downloads are cached, so follow-up `zoom`/`frames` calls on the same URL are fast.
 
----
+## What the overview produces
 
-## Step-by-Step Workflow
+All paths are returned in the tool result (`artifacts.*`).
 
-### Pass 1: Macro Editorial, Pacing & Audio-Visual Sync
+- `av-timeline.md` - one row per shot: how it starts (`hard` cut / `soft` transition), start time, length, the narration spoken during it, silences, and a link to its style frame.
+- `pacing-metrics.json` - shot list, average/median shot length, cuts per minute, shot-length distribution, pacing per chapter or time segment, silences, `narrationSync` (share of cuts landing near a caption start) and `visualActivity` (per-second on-screen motion with `motionHotspots`).
+- `contact-sheets/sheet_NNN.jpg` - 4x4 storyboard grids, every tile stamped with its timestamp. Read left-to-right, top-to-bottom.
+- `style-frames/style_NN_<time>.jpg` - native-resolution frame from the middle of representative shots.
+- `audio-strip.png` - waveform (top) and spectrogram (bottom) on one time axis; red lines = hard cuts, orange = soft transitions, yellow bands = silence.
+- `manifest.json` - everything above plus video metadata (title, channel, chapters, description, tags) and suggested Pass 3 windows.
 
-1. **Run Overview Extraction:**
-   - Call the MCP tool `deconstruct_video_overview` (or run `node bin/cli.mjs overview "<url-or-path>"`).
-2. **Read `pacing-metrics.json` and `av-timeline.md`:**
-   - Note the **Average Shot Length (ASL)**, **Cuts Per Minute (CPM)**, and **shot-length distribution**.
-   - Study the **2-column A/V Timeline** to see how spoken words trigger visual cuts (e.g., cutting *on* the keyword vs. cutting *0.2s before* the keyword with an audio pre-lap / J-cut).
-3. **View `audio-visual-strip/waveform_spectrum.png` and the Overview Contact Sheets (`contact-sheets/sheet_*.jpg`):**
-   - Use `view` on `waveform_spectrum.png` to spot **transient SFX spikes** (whooshes, paper foley, bass drops, risers) and **music dropouts/pauses** (e.g., the signature Vox/Johnny Harris 1-second music cut right before the thesis reveal).
-   - Use `view` on the `4x4` overview contact sheets to map the **Visual Modality Breakdown**:
-     - What percentage is **Archival B-Roll / Footage** vs. **2.5D Paper/Photo Parallax** vs. **Data Visualization / Charts** vs. **Map Flyovers (GeoLayers)** vs. **Full 3D / Character Animation** vs. **Talking Head / A-Roll**?
+## Procedure
 
----
+### Pass 1 - structure, pacing and sound
 
-### Pass 2: Visual Direction, Design System & Compositing Layer Stack
+1. Run the overview. Read `manifest.json` summary, then `av-timeline.md` and `pacing-metrics.json`.
+2. View `audio-strip.png`. Note where cut density changes, where silences or music drops sit relative to cuts, and whether cuts cluster on narration beats (`narrationSync`).
+3. View every contact sheet in order. Classify each stretch of the video by visual mode, e.g. talking head / A-roll, archival footage, documents and clippings, 2D vector animation, 2.5D parallax collage, maps, charts / data viz, kinetic typography, screen recordings, 3D renders, live-action B-roll.
+4. Map the narrative: hook (first 15-30 s), setup, sections or chapters, turns, payoff, outro. Tie each beat to timestamps.
 
-Use `view` on the full-resolution `style-frames/scene_*.jpg` (or call `extract_highres_style_frames` at key timestamps) to reverse-engineer the visual design system:
+### Pass 2 - visual design system
 
-1. **Canvas & Texture Stack (Bottom-to-Top Layer Order):**
-   - **Background Layer:** Solid color, paper/cardstock texture, grid/dot matrix, dark gradient, or blurred archival plate?
-   - **Midground Elements:** Cutout photos (smooth alpha vs. torn-paper edge vs. thick white sticker stroke), newspaper clippings with animated highlighter strips (multiply blend mode), or 3D geometry?
-   - **Foreground / HUD:** Kinetic typography, annotation arrows, callout boxes, lower thirds, or chart labels.
-   - **Post-Processing / Adjustment Layers:** Halftone shading, film grain/noise, vignette, subtle camera shake (wiggle expression), chromatic aberration, or glow/bloom.
-2. **Color Palette & Contrast:**
-   - Identify the exact functional color roles: **Base Canvas**, **Primary Text/Ink**, **Muted Context Layer** (desaturated/low-opacity background elements), and **Hero Accent Color** (e.g., Vox yellow `#FFF200`, Bloomberg terminal amber/cyan/magenta) used to direct the viewer's eye.
-3. **Typography & Data-Viz Craft:**
-   - Identify font classifications (condensed grotesque headline, editorial serif quote, monospace data/timestamp label).
-   - How is complexity managed in charts? (Progressive disclosure: dimming historical lines while highlighting a single series; direct line labels instead of cluttered legends).
+View the style frames (and pull extra ones with `extract_highres_style_frames` for anything important). Describe:
 
----
+- Layer stack from back to front: background / canvas, mid-ground assets, foreground graphics, overlays (grain, vignette, halftone, paper texture, light leaks).
+- Colour roles: base, text, de-emphasised context, accent / highlight. Give approximate colours; say "approximately" because frames are compressed.
+- Typography: classes (serif / grotesque sans / condensed / mono), hierarchy, how labels attach to things.
+- Graphic language: highlights, arrows, callouts, framing devices, how charts reveal data, how maps are styled.
+- For 3D: materials, lighting setup (key / fill / rim), depth of field, camera lens feel, render style.
 
-### Pass 3: Micro Motion, Camera Rigs & Transition Physics
+### Pass 3 - motion and transitions
 
-Select **2 to 4 signature transitions or complex animations** from Pass 1 and call `inspect_motion_or_transition` (or `node bin/cli.mjs zoom`) with `fps: 8` to `12` over a `2–6 second` window. Then `view` the high-FPS contact sheet and analyze:
+Pick 2-4 windows: `motionHotspots` from the manifest, soft transitions from the timeline, and any moment that looks distinctive on the contact sheets. Call `inspect_motion_or_transition` with `fps` 8-12 over 2-6 s. In the result:
 
-1. **Camera Rig & Spatial Mechanics:**
-   - **2D Flat Pan/Zoom:** Uniform scaling of all elements together.
-   - **2.5D Multiplane Parallax (After Effects 3D Layers):** Foreground cutouts move faster across the frame than the background canvas as the virtual camera dollys/trucks or orbits (`Z-depth` separation + shallow depth-of-field blur).
-   - **True 3D Scene (Blender / Cinema 4D / Unreal):** Perspective foreshortening on 3D meshes, dynamic shadow casting, shader/lighting changes, or procedural geometry nodes.
-   - **Map Engine (GeoLayers 3 / Mapbox):** 3D terrain pitch/bearing rotation, animated country borders (trim paths), extruded prism bars, and route line draw-ons.
-2. **Keyframe Timing & Easing Curves:**
-   - Measure frame-by-frame displacement across the `4x4` timestamped tiles:
-     - **Snappy Posterized / Stop-Motion Feel:** Held on 2s or 3s (`8–12 FPS` effective rate, `posterizeTime(12)` expression) common in Vox/collage styles.
-     - **Smooth Exponential Ease-Out:** Fast initial burst over 3–4 frames followed by a long, gentle settle over 10–15 frames (`cubic-bezier(0.16, 1, 0.3, 1)` / `85%` influence in AE Graph Editor).
-     - **Spring / Overshoot:** Element scales past `100%` to `~106%` before settling back.
-3. **Transition Mechanics:**
-   - **Match Cut (Graphic / Shape / Text):** An object or word stays anchored at the same screen coordinates while the surrounding scene morphs or cuts around it.
-   - **Mask / Matte Wipe:** Foreground object or ink/paper tear crosses the lens to reveal the next scene.
-   - **Camera Whip / Zoom-Through:** Camera punches into a detail (e.g., a newspaper headline or map city) which becomes the canvas for the next scene.
+- Tile-to-tile displacement shows easing: big early jumps that shrink = ease-out; slow-fast-slow = ease-in-out; overshoot then settle = spring; identical tiles in pairs = animation on twos / posterized time.
+- Different layers moving at different speeds = 2.5D parallax or a 3D camera; perspective change on objects = true 3D.
+- `motionCurve` in `zoom.json`: isolated spikes = cuts or flashes; sustained plateaus = continuous motion.
+- Check the window's `audio-strip.png` for whooshes, hits or risers that land on the transition.
 
----
+## Report format
 
-## Required Output Structure ("How It Was Made" Production Blueprint)
+1. **Summary** - style archetype, runtime analyzed, shots, cuts/min, average and median shot length, dominant visual modes and their rough share, likely toolchain.
+2. **Structure** - table of beats: time range | narration purpose | visual approach | sound.
+3. **Design system** - layer stack, colour roles, typography, graphic devices, with style-frame references.
+4. **Signature techniques** - 3-6 techniques, each with timestamps, what happens frame by frame, and how it is likely built.
+5. **Recreation recipe** - concrete steps in a named tool (After Effects, Blender, DaVinci Resolve, Premiere, Manim, Motion Canvas, Remotion...), including layer setup, keyframe timing, easing, effects and sound cues.
 
-Present your findings in this structured format:
+## Rules
 
-1. **Executive Production Summary:**
-   - Style archetype (e.g., *Vox-style 2.5D Archival Collage*, *Bloomberg Data-Driven Motion Essay*, *Kurzgesagt Vector/2.5D Animation*, *3D Technical Explainer*).
-   - Pacing metrics (ASL, Cuts/Min, Visual Modality mix).
-   - Likely production toolchain (e.g., *After Effects + GeoLayers 3 + Illustrator*, *Blender + DaVinci Resolve*, *Manim / Remotion*).
-2. **Narrative & Editorial Architecture (2-Column A/V Breakdown):**
-   - Table of major story beats showing **Timestamp | Narration Hook/Cue | Visual Strategy | Sound Design Cue**.
-3. **Visual Design System & Layer Stack:**
-   - Layer-by-layer compositing order (Background $\rightarrow$ Midground $\rightarrow$ Foreground $\rightarrow$ Texture/Adjustment layers), color palette roles, and typography system.
-4. **Signature Motion & Transition Deconstructions (with Timestamps):**
-   - Frame-by-frame breakdown of the best transitions/animations: camera rig, keyframe timing, easing curves, and how sound effects sell the motion.
-5. **Step-by-Step Recreation Recipe:**
-   - Concrete instructions (layer properties, expressions like `posterizeTime(12)` or `wiggle(1.5, 4)`, trim paths, blend modes, or code equivalents) so the user can recreate the exact look and feel.
+- Separate **measured** facts (cut times, shot lengths, silences, timestamps visible on tiles) from **inferred** claims (software used, technique names, intent). Label inferences as such; tools and plugins can rarely be identified with certainty.
+- Cite timestamps for every claim about the video.
+- Scene detection is a heuristic. Very fast motion can register as a soft transition, and slow dissolves can be missed. Confirm important cuts on the contact sheets or with a zoom before relying on them.
+- If there are no captions, say the narration analysis is unavailable rather than guessing what is said.
+- Respect copyright and the platform's terms: analyze for learning and critique, and do not redistribute downloaded media.
